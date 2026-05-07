@@ -1,0 +1,34 @@
+{
+  "pays": [
+    {
+      "nom": "France",
+      "regions": [
+        {
+          "nom": "Bordeaux",
+          "cepages": ["Cabernet Sauvignon", "Merlot", "Cabernet Franc", "Malbec", "Petit Verdot", "Sémillon", "Sauvignon Blanc", "Sauvignon Gris", "Muscadelle"],
+          "appellations": ["Margaux", "Médoc", "Sauternes", "Pessac-Léognan", "Pauillac", "Fronsac", "Entre-deux-Mers", "Graves", "Crémant de Bordeaux"]
+        },
+        {
+          "nom": "Alsace",
+          "cepages": ["Riesling", "Gewurztraminer", "Pinot Gris", "Pinot Blanc", "Muscat", "Pinot Noir"],
+          "appellations": ["Alsace", "Alsace Grand Cru", "Crémant d'Alsace"]
+        },
+        {
+          "nom": "Bourgogne",
+          "cepages": ["Chardonnay", "Pinot Noir", "Pinot Meunier"],
+          "appellations": ["Champagne", "Rosé des Riceys", "Coteaux Champenois"]
+        }
+      ]
+    },
+    {
+      "nom": "Italie",
+      "regions": [
+        {
+          "nom": "Italie", 
+          "cepages": ["Sangiovese", "Canaiolo"],
+          "appellations": ["Chianti Classico", "Toscane"]
+        }
+      ]
+    }
+  ]
+}
