@@ -163,11 +163,11 @@ export default function MJPage() {
     if (bottles.length === 0) return
     setBusy(true)
 
-    // Nettoyage complet — joueurs supprimés, pas juste réinitialisés
+    // Nettoyage complet — colonnes garanties d'exister dans chaque table
     await Promise.all([
-      supabase.from('game_config').delete().gte('id', 0),
-      supabase.from('answers').delete().gte('id', 0),
-      supabase.from('players').delete().gte('id', 0),
+      supabase.from('game_config').delete().neq('round_number', 0),
+      supabase.from('answers').delete().neq('round_number', 0),
+      supabase.from('players').delete().neq('pseudo', ''),
     ])
 
     const { error } = await supabase.from('game_config').insert(
@@ -198,7 +198,7 @@ export default function MJPage() {
 
   async function startRound(n: number) {
     setBusy(true)
-    await supabase.from('game_config').update({ is_active: false }).gte('id', 0)
+    await supabase.from('game_config').update({ is_active: false }).neq('round_number', 0)
     await supabase.from('game_config').update({ is_active: true }).eq('round_number', n)
     setBusy(false)
   }
@@ -239,9 +239,9 @@ export default function MJPage() {
   async function resetGame() {
     if (!confirm('Réinitialiser la partie ? Toutes les données seront supprimées.')) return
     await Promise.all([
-      supabase.from('game_config').delete().gte('id', 0),
-      supabase.from('answers').delete().gte('id', 0),
-      supabase.from('players').delete().gte('id', 0),
+      supabase.from('game_config').delete().neq('round_number', 0),
+      supabase.from('answers').delete().neq('round_number', 0),
+      supabase.from('players').delete().neq('pseudo', ''),
       supabase.from('game_state').upsert({ id: 1, status: 'setup' }),
     ])
     setBottles([]); setCurrent(EMPTY_BOTTLE); setRounds([])
