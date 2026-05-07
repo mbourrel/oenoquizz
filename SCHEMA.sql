@@ -24,8 +24,13 @@ ALTER TABLE answers
   ADD COLUMN IF NOT EXISTS region text,
   ADD COLUMN IF NOT EXISTS appellation text,
   ADD COLUMN IF NOT EXISTS cepage text,
+  ADD COLUMN IF NOT EXISTS millesime integer,
   ADD COLUMN IF NOT EXISTS commentaire text,
   ADD COLUMN IF NOT EXISTS score integer;
+
+-- 3b. Millésime pour la bonne réponse (game_config)
+ALTER TABLE game_config
+  ADD COLUMN IF NOT EXISTS millesime integer;
 
 -- 4. Activer Realtime sur toutes les tables utilisées
 -- (à faire dans le dashboard Supabase : Database > Replication > Tables)

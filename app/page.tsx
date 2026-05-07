@@ -10,7 +10,8 @@ type PageState = 'init' | 'registration' | 'waiting' | 'playing' | 'answered' | 
 interface PlayerScore { pseudo: string; total_score: number }
 interface ActiveRound { round_number: number; is_active: boolean }
 
-const EMPTY = { pays: '', region: '', appellation: '', cepage: '', commentaire: '' }
+const EMPTY = { pays: '', region: '', appellation: '', cepage: '', millesime: '', commentaire: '' }
+const MILLESIMES = Array.from({ length: 75 }, (_, i) => 2024 - i)
 export default function HomePage() {
   const [pageState, setPageState] = useState<PageState>('init')
   const [pseudoInput, setPseudoInput] = useState('')
@@ -126,6 +127,7 @@ export default function HomePage() {
       region: selection.region || null,
       appellation: selection.appellation || null,
       cepage: selection.cepage || null,
+      millesime: selection.millesime ? parseInt(selection.millesime) : null,
       commentaire: selection.commentaire || null,
       score: null,
     })
@@ -262,6 +264,15 @@ export default function HomePage() {
                 </div>
               </>
             )}
+
+            <div>
+              <label className="text-slate-400 text-xs mb-1 block">Millésime (optionnel)</label>
+              <select value={selection.millesime} onChange={e => updateSel('millesime', e.target.value)}
+                className="w-full bg-slate-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600">
+                <option value="">Sélectionner...</option>
+                {MILLESIMES.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
 
             <div>
               <label className="text-slate-400 text-xs mb-1 block">Commentaire (optionnel)</label>

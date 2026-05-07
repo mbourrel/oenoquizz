@@ -7,23 +7,25 @@ import vinsData from '@/data/vins.json'
 /* ── Types ─────────────────────────────────────────────── */
 
 interface BottleConfig {
-  pays: string; region: string; appellation: string; cepage: string; nom_bouteille: string
+  pays: string; region: string; appellation: string; cepage: string
+  nom_bouteille: string; millesime: string
 }
 interface Round {
   id: number; round_number: number; pays: string; region: string
   appellation: string; cepage: string; nom_bouteille: string | null
-  is_active: boolean; is_completed: boolean
+  millesime: number | null; is_active: boolean; is_completed: boolean
 }
 interface Answer {
   id: number; pseudo: string; round_number: number
   pays: string | null; region: string | null; appellation: string | null
-  cepage: string | null; commentaire: string | null; score: number | null
+  cepage: string | null; millesime: number | null; commentaire: string | null; score: number | null
 }
 interface Ranking { pseudo: string; total: number }
 
 type GameStatus = 'setup' | 'playing' | 'finished'
 
-const EMPTY_BOTTLE: BottleConfig = { pays: '', region: '', appellation: '', cepage: '', nom_bouteille: '' }
+const EMPTY_BOTTLE: BottleConfig = { pays: '', region: '', appellation: '', cepage: '', nom_bouteille: '', millesime: '' }
+const MILLESIMES = Array.from({ length: 75 }, (_, i) => 2024 - i)
 
 function calcScore(a: Answer, r: Round): number {
   let pts = 0
@@ -31,6 +33,11 @@ function calcScore(a: Answer, r: Round): number {
   if (a.region === r.region) pts += 1
   if (a.appellation === r.appellation) pts += 2
   if (a.cepage === r.cepage) pts += 1
+  if (r.millesime != null && a.millesime != null) {
+    const diff = Math.abs(a.millesime - r.millesime)
+    if (diff === 0) pts += 2
+    else if (diff <= 2) pts += 1
+  }
   return pts
 }
 
@@ -72,7 +79,7 @@ export default function MJPage() {
   const loadAnswers = useCallback(async (roundsData: Round[]) => {
     const { data } = await supabase
       .from('answers')
-      .select('id, pseudo, round_number, pays, region, appellation, cepage, commentaire, score')
+      .select('id, pseudo, round_number, pays, region, appellation, cepage, millesime, commentaire, score')
       .order('pseudo')
     const ans: Answer[] = data ?? []
     setAnswers(ans)
@@ -175,6 +182,7 @@ export default function MJPage() {
         round_number: i + 1, pays: b.pays, region: b.region,
         appellation: b.appellation, cepage: b.cepage,
         nom_bouteille: b.nom_bouteille || null,
+        millesime: b.millesime ? parseInt(b.millesime) : null,
         is_active: false, is_completed: false,
       }))
     )
@@ -341,11 +349,21 @@ export default function MJPage() {
               </div>
             </div>
 
-            <div className="mb-4">
-              <label className="text-slate-400 text-xs mb-1 block">Nom de la bouteille (optionnel)</label>
-              <input type="text" value={current.nom_bouteille} onChange={e => updateBottle('nom_bouteille', e.target.value)}
-                placeholder="Ex : Château Margaux 2018"
-                className="w-full bg-slate-700 text-white placeholder-slate-500 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-600" />
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="text-slate-400 text-xs mb-1 block">Millésime (optionnel)</label>
+                <select value={current.millesime} onChange={e => updateBottle('millesime', e.target.value)}
+                  className="w-full bg-slate-700 text-white rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-600">
+                  <option value="">Sélectionner...</option>
+                  {MILLESIMES.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs mb-1 block">Nom de la bouteille (optionnel)</label>
+                <input type="text" value={current.nom_bouteille} onChange={e => updateBottle('nom_bouteille', e.target.value)}
+                  placeholder="Ex : Château Margaux"
+                  className="w-full bg-slate-700 text-white placeholder-slate-500 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-600" />
+              </div>
             </div>
 
             <button onClick={() => { if (!canAdd) return; setBottles(p => [...p, { ...current }]); setCurrent(EMPTY_BOTTLE) }}
@@ -364,7 +382,7 @@ export default function MJPage() {
                       <span className="bg-red-800 text-white text-xs font-bold px-2 py-0.5 rounded-full">{i + 1}</span>
                       {b.nom_bouteille && <span className="text-white text-sm font-medium">{b.nom_bouteille}</span>}
                     </div>
-                    <p className="text-slate-400 text-xs mt-0.5">{b.pays} › {b.region} › {b.appellation} · {b.cepage}</p>
+                    <p className="text-slate-400 text-xs mt-0.5">{b.pays} › {b.region} › {b.appellation} · {b.cepage}{b.millesime ? ` · ${b.millesime}` : ''}</p>
                   </div>
                   <button onClick={() => setBottles(p => p.filter((_, j) => j !== i))}
                     className="text-slate-600 hover:text-red-400 text-xl ml-3 transition-colors">×</button>
@@ -460,7 +478,7 @@ export default function MJPage() {
                       {round.nom_bouteille && <span className="text-white text-sm font-medium">{round.nom_bouteille}</span>}
                       {round.is_completed && <span className="text-slate-500 text-xs">✓ {cnt} rép.</span>}
                     </div>
-                    <p className="text-slate-400 text-xs">{round.pays} › {round.region} › {round.appellation} · {round.cepage}</p>
+                    <p className="text-slate-400 text-xs">{round.pays} › {round.region} › {round.appellation} · {round.cepage}{round.millesime ? ` · ${round.millesime}` : ''}</p>
                     {round.is_active && <p className="text-green-400 text-xs mt-1">{cnt} / {playerCount} réponse{playerCount !== 1 ? 's' : ''}</p>}
                   </div>
                   {canStart && (
@@ -480,7 +498,7 @@ export default function MJPage() {
           <div className="border-t border-slate-700 pt-8">
             <h2 className="text-xl font-bold text-white mb-1">Correction des scores</h2>
             <p className="text-slate-400 text-sm mb-6">
-              Scores calculés automatiquement — pays +1, région +1, appellation +2, cépage +1 — ajustez si besoin
+              Scores calculés automatiquement — pays +1, région +1, appellation +2, cépage +1, millésime exact +2 (±2 ans +1) — ajustez si besoin
             </p>
 
             {!scoringReady ? (
@@ -502,6 +520,7 @@ export default function MJPage() {
                             <span>Région : {round.region}</span>
                             <span>Appellation : {round.appellation} (+2)</span>
                             <span>Cépage : {round.cepage}</span>
+                            {round.millesime && <span>Millésime : {round.millesime} (+2/+1)</span>}
                           </div>
                         </div>
                         <div className="divide-y divide-slate-700">
@@ -516,6 +535,9 @@ export default function MJPage() {
                                   <FieldRow label="Région" value={a.region} correct={round.region} />
                                   <FieldRow label="Appellation" value={a.appellation} correct={round.appellation} />
                                   <FieldRow label="Cépage" value={a.cepage} correct={round.cepage} />
+                                  {round.millesime != null && (
+                                    <MillesimeRow value={a.millesime} correct={round.millesime} />
+                                  )}
                                 </div>
                                 {a.commentaire && <p className="text-slate-400 text-xs mt-1.5 italic">&ldquo;{a.commentaire}&rdquo;</p>}
                               </div>
@@ -572,6 +594,19 @@ function FieldRow({ label, value, correct }: { label: string; value: string | nu
       <span className="text-slate-500 w-20 shrink-0">{label} :</span>
       <span className={value ? (ok ? 'text-green-400' : 'text-red-400') : 'text-slate-600'}>{value ?? '—'}</span>
       {!ok && value && <span className="text-slate-600 text-xs">(→ {correct})</span>}
+    </div>
+  )
+}
+
+function MillesimeRow({ value, correct }: { value: number | null; correct: number }) {
+  const diff = value != null ? Math.abs(value - correct) : null
+  const color = diff == null ? 'text-slate-600' : diff === 0 ? 'text-green-400' : diff <= 2 ? 'text-yellow-400' : 'text-red-400'
+  const hint = diff == null ? null : diff === 0 ? '+2' : diff <= 2 ? '+1' : `(→ ${correct})`
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-slate-500 w-20 shrink-0">Millésime :</span>
+      <span className={color}>{value ?? '—'}</span>
+      {hint && <span className="text-slate-500 text-xs">{hint}</span>}
     </div>
   )
 }
