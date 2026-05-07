@@ -77,11 +77,12 @@ export default function MJPage() {
   }, [])
 
   const loadAnswers = useCallback(async (roundsData: Round[]) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('answers')
-      .select('id, pseudo, round_number, pays, region, appellation, cepage, millesime, commentaire, score')
+      .select('*')
       .order('pseudo')
-    const ans: Answer[] = data ?? []
+    if (error) console.error('loadAnswers:', error.message)
+    const ans: Answer[] = (data ?? []) as Answer[]
     setAnswers(ans)
     const init: Record<string, number> = {}
     ans.forEach(a => {
