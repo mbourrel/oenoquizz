@@ -1,129 +1,344 @@
 'use client'
-import { useState, useEffect } from 'react'
-import vinsData from '../../data/vins.json'
-import { supabase } from '../../lib/supabase'
 
-export default function PageJoueur() {
+import { useState, useEffect, useCallback } from 'react'
+import { supabase } from '@/lib/supabase'
+import vinsData from '@/data/vins.json'
+
+interface RoundConfig {
+  round_number: number
+  is_active: boolean
+  is_completed: boolean
+}
+
+interface PlayerScore {
+  pseudo: string
+  total_score: number
+}
+
+type PageState = 'registration' | 'waiting' | 'playing' | 'answered' | 'finished'
+
+const EMPTY_SELECTION = { pays: '', region: '', appellation: '', cepage: '', commentaire: '' }
+
+export default function JoueurPage() {
+  const [pageState, setPageState] = useState<PageState>('registration')
   const [pseudo, setPseudo] = useState('')
-  const [isRegistered, setIsRegistered] = useState(false)
-  const [mancheActive, setMancheActive] = useState<any>(null)
-  const [reponseEnvoyee, setReponseEnvoyee] = useState(false)
-  const [classement, setClassement] = useState<any[]>([])
-  const [selection, setSelection] = useState({ pays: '', region: '', appellation: '', cepage: '', commentaire: '' })
+  const [activePseudo, setActivePseudo] = useState('')
+  const [activeRound, setActiveRound] = useState<RoundConfig | null>(null)
+  const [selection, setSelection] = useState(EMPTY_SELECTION)
+  const [classement, setClassement] = useState<PlayerScore[]>([])
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    const syncData = async () => {
-      const { data: config } = await supabase.from('game_config').select('*').eq('is_active', true).single()
-      if (config) {
-        if (mancheActive?.round_number !== config.round_number) setReponseEnvoyee(false)
-        setMancheActive(config)
-      } else {
-        setMancheActive(null)
-      }
-      const { data: score } = await supabase.from('players').select('*').order('total_score', { ascending: false })
-      setClassement(score || [])
+  const fetchClassement = useCallback(async () => {
+    const { data } = await supabase
+      .from('players')
+      .select('pseudo, total_score')
+      .order('total_score', { ascending: false })
+    if (data) setClassement(data)
+  }, [])
+
+  const refreshGameState = useCallback(async (currentPseudo: string) => {
+    const [gsRes, roundRes] = await Promise.all([
+      supabase.from('game_state').select('status').eq('id', 1).single(),
+      supabase.from('game_config').select('round_number, is_active, is_completed').eq('is_active', true).maybeSingle(),
+    ])
+
+    if (gsRes.data?.status === 'finished') {
+      setPageState('finished')
+      fetchClassement()
+      return
     }
 
-    syncData()
-    const channel = supabase.channel('game-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_config' }, () => syncData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, () => syncData())
+    if (roundRes.data) {
+      const round = roundRes.data
+      setActiveRound(round)
+      const { data: existing } = await supabase
+        .from('answers')
+        .select('id')
+        .eq('pseudo', currentPseudo)
+        .eq('round_number', round.round_number)
+        .maybeSingle()
+      if (existing) {
+        setPageState('answered')
+        fetchClassement()
+      } else {
+        setSelection(EMPTY_SELECTION)
+        setPageState('playing')
+      }
+    } else {
+      setPageState(prev => (prev === 'answered' ? 'answered' : 'waiting'))
+    }
+  }, [fetchClassement])
+
+  useEffect(() => {
+    if (!activePseudo) return
+
+    refreshGameState(activePseudo)
+
+    const channel = supabase
+      .channel('joueur-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_config' }, () => refreshGameState(activePseudo))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_state' }, () => refreshGameState(activePseudo))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, fetchClassement)
       .subscribe()
+
     return () => { supabase.removeChannel(channel) }
-  }, [mancheActive?.round_number])
+  }, [activePseudo, refreshGameState, fetchClassement])
 
-  const rejoindrePartie = async () => {
-    if (!pseudo) return
+  async function joinGame() {
+    if (!pseudo.trim()) return
     setLoading(true)
-    const { error } = await supabase.from('players').upsert({ pseudo }, { onConflict: 'pseudo' })
-    if (!error) setIsRegistered(true)
+    const trimmed = pseudo.trim()
+    await supabase
+      .from('players')
+      .upsert({ pseudo: trimmed, total_score: 0 }, { onConflict: 'pseudo', ignoreDuplicates: true })
+    setActivePseudo(trimmed)
     setLoading(false)
   }
 
-  const paysDispo = vinsData.pays
-  const regionsDispo = selection.pays ? paysDispo.find(p => p.nom === selection.pays)?.regions || [] : []
-  const regionData = regionsDispo.find(r => r.nom === selection.region)
-
-  const envoyerReponse = async () => {
-    if (!selection.appellation || !mancheActive) return
+  async function submitAnswer() {
+    if (!activeRound || !activePseudo) return
     setLoading(true)
-    const { error } = await supabase.from('answers').insert([{
-      pseudo: pseudo,
-      round_number: mancheActive.round_number,
-      data: { ...selection }
-    }])
-    if (!error) setReponseEnvoyee(true)
+    await supabase.from('answers').insert({
+      pseudo: activePseudo,
+      round_number: activeRound.round_number,
+      pays: selection.pays || null,
+      region: selection.region || null,
+      appellation: selection.appellation || null,
+      cepage: selection.cepage || null,
+      commentaire: selection.commentaire || null,
+      score: null,
+    })
     setLoading(false)
+    setPageState('answered')
+    fetchClassement()
   }
 
-  if (!isRegistered) {
+  const paysOptions = vinsData.pays.map(p => p.nom)
+  const selectedPays = vinsData.pays.find(p => p.nom === selection.pays)
+  const regionOptions = selectedPays?.regions.map(r => r.nom) ?? []
+  const selectedRegion = selectedPays?.regions.find(r => r.nom === selection.region)
+  const appellationOptions = selectedRegion?.appellations ?? []
+  const cepageOptions = selectedRegion?.cepages ?? []
+
+  function updateSelection(field: keyof typeof selection, value: string) {
+    setSelection(prev => {
+      const next = { ...prev, [field]: value }
+      if (field === 'pays') { next.region = ''; next.appellation = ''; next.cepage = '' }
+      if (field === 'region') { next.appellation = ''; next.cepage = '' }
+      return next
+    })
+  }
+
+  if (pageState === 'registration') {
     return (
-      <div className="p-6 max-w-md mx-auto mt-20 text-center space-y-6">
-        <h1 className="text-4xl font-black text-red-800">OenoQuizz 🍷</h1>
-        <input 
-          type="text" className="w-full p-4 border-2 rounded-2xl text-center text-black outline-none focus:border-red-500"
-          placeholder="Ton pseudo..." value={pseudo} onChange={(e) => setPseudo(e.target.value)}
-        />
-        <button onClick={rejoindrePartie} className="w-full bg-red-800 text-white py-4 rounded-2xl font-bold">REJOINDRE</button>
-      </div>
+      <main className="min-h-screen flex items-center justify-center p-8">
+        <div className="w-full max-w-sm text-center">
+          <div className="text-5xl mb-4">🥂</div>
+          <h1 className="text-3xl font-bold text-white mb-2">Rejoindre</h1>
+          <p className="text-slate-400 mb-8">Entrez votre pseudo pour participer</p>
+          <input
+            type="text"
+            placeholder="Votre pseudo..."
+            value={pseudo}
+            onChange={e => setPseudo(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && joinGame()}
+            className="w-full bg-slate-800 border border-slate-700 text-white placeholder-slate-500 rounded-xl px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-red-600"
+          />
+          <button
+            onClick={joinGame}
+            disabled={!pseudo.trim() || loading}
+            className="w-full bg-red-700 hover:bg-red-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-xl py-3 transition-colors"
+          >
+            {loading ? 'Connexion...' : 'Rejoindre le jeu'}
+          </button>
+        </div>
+      </main>
     )
   }
 
-  if (reponseEnvoyee || !mancheActive) {
+  if (pageState === 'waiting') {
     return (
-      <div className="p-6 max-w-md mx-auto space-y-8 bg-slate-50 min-h-screen text-black font-sans">
+      <main className="min-h-screen flex items-center justify-center p-8">
         <div className="text-center">
-          <h2 className="text-xl font-bold text-green-700">Réponse envoyée ! 🍷</h2>
-          <p className="text-slate-400 text-sm italic">Préparez-vous pour le vin suivant...</p>
+          <div className="text-5xl mb-4 animate-pulse">🍷</div>
+          <h2 className="text-xl font-bold text-white mb-2">Bienvenue, {activePseudo} !</h2>
+          <p className="text-slate-400">En attente du maître du jeu...</p>
+          <p className="text-slate-500 text-sm mt-2">La prochaine manche commencera bientôt</p>
         </div>
-        <div className="bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200">
-          <div className="bg-red-800 p-4 text-white font-bold text-center italic">Le Classement</div>
-          <div className="p-4 space-y-3">
-            {classement.map((p, i) => (
-              <div key={p.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <span className="font-bold text-slate-700">#{i+1} {p.pseudo}</span>
-                <span className="bg-yellow-400 text-slate-900 px-3 py-1 rounded-full font-black">{p.total_score} pts</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      </main>
     )
   }
 
+  if (pageState === 'playing' && activeRound) {
+    return (
+      <main className="min-h-screen p-6">
+        <div className="max-w-lg mx-auto">
+          <div className="flex items-center justify-between mb-6">
+            <p className="text-slate-400 text-sm">
+              Joueur : <span className="text-white font-medium">{activePseudo}</span>
+            </p>
+            <span className="bg-red-800 text-white text-sm font-semibold px-4 py-1.5 rounded-full">
+              Manche {activeRound.round_number}
+            </span>
+          </div>
+
+          <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700 mb-4 space-y-3">
+            <h2 className="text-white font-bold text-lg mb-2">Identifiez ce vin</h2>
+
+            <div>
+              <label className="text-slate-400 text-xs mb-1 block">Pays</label>
+              <select
+                value={selection.pays}
+                onChange={e => updateSelection('pays', e.target.value)}
+                className="w-full bg-slate-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600"
+              >
+                <option value="">Sélectionner...</option>
+                {paysOptions.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            {selection.pays && (
+              <div>
+                <label className="text-slate-400 text-xs mb-1 block">Région</label>
+                <select
+                  value={selection.region}
+                  onChange={e => updateSelection('region', e.target.value)}
+                  className="w-full bg-slate-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600"
+                >
+                  <option value="">Sélectionner...</option>
+                  {regionOptions.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+            )}
+
+            {selection.region && (
+              <>
+                <div>
+                  <label className="text-slate-400 text-xs mb-1 block">Appellation</label>
+                  <select
+                    value={selection.appellation}
+                    onChange={e => updateSelection('appellation', e.target.value)}
+                    className="w-full bg-slate-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  >
+                    <option value="">Sélectionner...</option>
+                    {appellationOptions.map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-slate-400 text-xs mb-1 block">Cépage dominant</label>
+                  <select
+                    value={selection.cepage}
+                    onChange={e => updateSelection('cepage', e.target.value)}
+                    className="w-full bg-slate-700 text-white rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  >
+                    <option value="">Sélectionner...</option>
+                    {cepageOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="text-slate-400 text-xs mb-1 block">Commentaire (optionnel)</label>
+              <textarea
+                value={selection.commentaire}
+                onChange={e => updateSelection('commentaire', e.target.value)}
+                placeholder="Notes de dégustation..."
+                rows={3}
+                className="w-full bg-slate-700 text-white placeholder-slate-500 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-red-600 resize-none"
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={submitAnswer}
+            disabled={loading || !selection.pays}
+            className="w-full bg-red-700 hover:bg-red-600 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold rounded-xl py-3 transition-colors"
+          >
+            {loading ? 'Envoi...' : 'Valider ma réponse'}
+          </button>
+        </div>
+      </main>
+    )
+  }
+
+  if (pageState === 'answered') {
+    return (
+      <main className="min-h-screen p-6">
+        <div className="max-w-lg mx-auto">
+          <div className="text-center mb-8">
+            <div className="w-12 h-12 bg-green-700 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span className="text-white text-xl">✓</span>
+            </div>
+            <h2 className="text-white font-bold text-xl">Réponse enregistrée !</h2>
+            <p className="text-slate-400 mt-1 text-sm">En attente de la prochaine manche...</p>
+          </div>
+          <Classement data={classement} myPseudo={activePseudo} />
+        </div>
+      </main>
+    )
+  }
+
+  if (pageState === 'finished') {
+    return (
+      <main className="min-h-screen p-6">
+        <div className="max-w-lg mx-auto">
+          <div className="text-center mb-8">
+            <div className="text-5xl mb-3">🏆</div>
+            <h1 className="text-3xl font-bold text-white mb-2">Fin de la dégustation !</h1>
+            <p className="text-slate-400">Voici le classement final</p>
+          </div>
+          <Classement data={classement} myPseudo={activePseudo} final />
+        </div>
+      </main>
+    )
+  }
+
+  return null
+}
+
+function Classement({
+  data,
+  myPseudo,
+  final,
+}: {
+  data: PlayerScore[]
+  myPseudo: string
+  final?: boolean
+}) {
+  const medals = ['🥇', '🥈', '🥉']
   return (
-    <div className="p-6 max-w-md mx-auto space-y-6 bg-white min-h-screen text-slate-900 font-sans">
-      <div className="flex justify-between items-center border-b pb-4">
-        <span className="font-black text-red-800 uppercase tracking-tighter">Manche {mancheActive.round_number}</span>
-        <span className="text-[10px] font-bold bg-slate-100 px-3 py-1 rounded-full uppercase">{pseudo}</span>
-      </div>
-      <div className="space-y-4">
-        <select className="w-full p-4 border rounded-2xl bg-slate-50 text-black" value={selection.pays} onChange={(e) => setSelection({ ...selection, pays: e.target.value, region: '', appellation: '', cepage: '' })}>
-          <option value="">Pays...</option>
-          {paysDispo.map(p => <option key={p.nom} value={p.nom}>{p.nom}</option>)}
-        </select>
-        {selection.pays && (
-          <select className="w-full p-4 border rounded-2xl bg-slate-50 text-black" value={selection.region} onChange={(e) => setSelection({ ...selection, region: e.target.value, appellation: '', cepage: '' })}>
-            <option value="">Région...</option>
-            {regionsDispo.map(r => <option key={r.nom} value={r.nom}>{r.nom}</option>)}
-          </select>
-        )}
-        {selection.region && (
-          <>
-            <select className="w-full p-4 border rounded-2xl bg-slate-50 text-black font-bold" value={selection.appellation} onChange={(e) => setSelection({ ...selection, appellation: e.target.value })}>
-              <option value="">Appellation...</option>
-              {regionData?.appellations.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-            <select className="w-full p-4 border rounded-2xl bg-slate-50 text-black" value={selection.cepage} onChange={(e) => setSelection({ ...selection, cepage: e.target.value })}>
-              <option value="">Cépage dominant...</option>
-              {regionData?.cepages.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </>
-        )}
-        <textarea className="w-full p-4 border rounded-2xl bg-slate-50 text-black text-sm outline-none focus:ring-2 focus:ring-red-500" placeholder="Un mot sur le domaine ?" rows={2} value={selection.commentaire} onChange={(e) => setSelection({ ...selection, commentaire: e.target.value })}/>
-      </div>
-      <button onClick={envoyerReponse} disabled={loading} className="w-full bg-red-800 text-white py-5 rounded-2xl font-black text-lg shadow-lg">ENVOYER</button>
+    <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700">
+      <h3 className="text-white font-bold text-lg mb-4">
+        {final ? '🏆 Classement final' : '📊 Classement provisoire'}
+      </h3>
+      {data.length === 0 ? (
+        <p className="text-slate-400 text-center py-4 text-sm">Aucun score pour le moment</p>
+      ) : (
+        <div className="space-y-2">
+          {data.map((player, i) => (
+            <div
+              key={player.pseudo}
+              className={`flex items-center justify-between px-4 py-3 rounded-xl ${
+                player.pseudo === myPseudo
+                  ? 'bg-red-900/40 border border-red-800'
+                  : 'bg-slate-700'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-6 text-center text-sm">
+                  {medals[i] ?? `${i + 1}.`}
+                </span>
+                <span className="text-white font-medium">{player.pseudo}</span>
+                {player.pseudo === myPseudo && (
+                  <span className="text-xs text-red-400">(vous)</span>
+                )}
+              </div>
+              <span className="text-white font-bold">{player.total_score} pts</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
