@@ -29,14 +29,31 @@ export default function HomePage() {
   }, [])
 
   const refreshGame = useCallback(async (pseudo: string) => {
+    // Vérifie si le joueur existe encore (le MJ peut avoir relancé une nouvelle partie)
+    const { data: me } = await supabase
+      .from('players').select('pseudo').eq('pseudo', pseudo).maybeSingle()
+    if (!me) {
+      localStorage.removeItem('oenoquizz_pseudo')
+      setActivePseudo('')
+      setPseudoInput('')
+      setPageState('registration')
+      return
+    }
+
     const [gsRes, roundRes] = await Promise.all([
       supabase.from('game_state').select('status').eq('id', 1).single(),
       supabase.from('game_config').select('round_number, is_active').eq('is_active', true).maybeSingle(),
     ])
 
-    if (gsRes.data?.status === 'finished') {
+    const gameStatus = gsRes.data?.status
+    if (gameStatus === 'finished') {
       setPageState('finished')
       fetchClassement()
+      return
+    }
+    // La partie a été réinitialisée pendant que le joueur attendait
+    if (!gameStatus || gameStatus === 'setup') {
+      setPageState('waiting')
       return
     }
 

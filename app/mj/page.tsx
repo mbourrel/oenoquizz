@@ -47,6 +47,7 @@ export default function MJPage() {
 
   /* playing */
   const [rounds, setRounds] = useState<Round[]>([])
+  const [players, setPlayers] = useState<string[]>([])
   const [playerCount, setPlayerCount] = useState(0)
   const [answerCounts, setAnswerCounts] = useState<Record<number, number>>({})
 
@@ -91,6 +92,13 @@ export default function MJPage() {
     return r
   }, [])
 
+  const loadPlayers = useCallback(async () => {
+    const { data } = await supabase.from('players').select('pseudo').order('pseudo')
+    const pseudos = data?.map(p => p.pseudo) ?? []
+    setPlayers(pseudos)
+    setPlayerCount(pseudos.length)
+  }, [])
+
   const loadFinalRanking = useCallback(async () => {
     const { data } = await supabase
       .from('players').select('pseudo, total_score').order('total_score', { ascending: false })
@@ -108,7 +116,7 @@ export default function MJPage() {
       if (status === 'setup') { setLoading(false); return }
 
       const roundsData = await loadRounds()
-      await Promise.all([loadAnswerCounts(), supabase.from('players').select('id', { count: 'exact', head: true }).then(r => setPlayerCount(r.count ?? 0))])
+      await Promise.all([loadAnswerCounts(), loadPlayers()])
 
       if (status === 'finished') {
         await loadFinalRanking()
@@ -126,9 +134,7 @@ export default function MJPage() {
         if (r.every(x => x.is_completed) && !scoringReady) await loadAnswers(r)
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'answers' }, loadAnswerCounts)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, () =>
-        supabase.from('players').select('id', { count: 'exact', head: true }).then(r => setPlayerCount(r.count ?? 0))
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, loadPlayers)
       .subscribe()
 
     return () => { supabase.removeChannel(ch) }
@@ -156,12 +162,15 @@ export default function MJPage() {
   async function launchGame() {
     if (bottles.length === 0) return
     setBusy(true)
+
+    // Nettoyage complet — joueurs supprimés, pas juste réinitialisés
     await Promise.all([
       supabase.from('game_config').delete().gte('id', 0),
       supabase.from('answers').delete().gte('id', 0),
-      supabase.from('players').update({ total_score: 0 }).gte('id', 0),
+      supabase.from('players').delete().gte('id', 0),
     ])
-    await supabase.from('game_config').insert(
+
+    const { error } = await supabase.from('game_config').insert(
       bottles.map((b, i) => ({
         round_number: i + 1, pays: b.pays, region: b.region,
         appellation: b.appellation, cepage: b.cepage,
@@ -169,10 +178,18 @@ export default function MJPage() {
         is_active: false, is_completed: false,
       }))
     )
+    if (error) {
+      alert('Erreur lors de la création des manches :\n' + error.message + '\n\nAvez-vous exécuté SCHEMA.sql dans Supabase ?')
+      setBusy(false)
+      return
+    }
+
     await supabase.from('game_state').upsert({ id: 1, status: 'playing' })
     await loadRounds()
+    setPlayers([])
     setPlayerCount(0)
     setAnswerCounts({})
+    setScoringReady(false)
     setGameStatus('playing')
     setBusy(false)
   }
@@ -367,7 +384,8 @@ export default function MJPage() {
 
   /* ── PLAYING (+ scoring when all done) ── */
   const activeRound = rounds.find(r => r.is_active) ?? null
-  const allDone = rounds.length > 0 && rounds.every(r => r.is_completed)
+  // Strict check : null/undefined (colonne absente) → pas terminé
+  const allDone = rounds.length > 0 && rounds.every(r => r.is_completed === true)
   const totals = playerTotals()
   const medals = ['🥇', '🥈', '🥉']
 
@@ -386,6 +404,22 @@ export default function MJPage() {
           <button onClick={resetGame} className="text-slate-600 hover:text-red-400 text-sm transition-colors">
             Réinitialiser
           </button>
+        </div>
+
+        {/* Players list */}
+        <div className="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-6">
+          <p className="text-slate-400 text-sm mb-2">
+            {playerCount === 0
+              ? 'En attente des joueurs...'
+              : `${playerCount} joueur${playerCount > 1 ? 's' : ''} inscrit${playerCount > 1 ? 's' : ''}`}
+          </p>
+          {players.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {players.map(p => (
+                <span key={p} className="bg-slate-700 text-slate-200 text-xs px-3 py-1 rounded-full">{p}</span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Active round banner */}
@@ -411,7 +445,7 @@ export default function MJPage() {
         <div className="space-y-3 mb-8">
           {rounds.map(round => {
             const cnt = answerCounts[round.round_number] ?? 0
-            const canStart = !activeRound && !round.is_completed
+            const canStart = !activeRound && round.is_completed !== true
             return (
               <div key={round.id} className={`rounded-xl p-4 border ${
                 round.is_active ? 'bg-green-900/20 border-green-800' :
